@@ -33,6 +33,9 @@ function App() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [minRating, setMinRating] = useState<number>(0);
   const [showFilters, setShowFilters] = useState(false);
+  const [selectedMods, setSelectedMods] = useState<string[]>([]);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [collectionUrl, setCollectionUrl] = useState('');
 
   useEffect(() => {
     fetchMods();
@@ -232,6 +235,106 @@ function App() {
     }
   };
 
+  const toggleSelectMod = (modId: string) => {
+    setSelectedMods(prev =>
+      prev.includes(modId)
+        ? prev.filter(id => id !== modId)
+        : [...prev, modId]
+    );
+  };
+
+  const selectAllMods = () => {
+    setSelectedMods(filteredMods.map(mod => mod.id));
+  };
+
+  const clearSelection = () => {
+    setSelectedMods([]);
+  };
+
+  const exportSelectedMods = async () => {
+    if (selectedMods.length === 0) {
+      alert('Please select at least one mod to export');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch('/api/mods/export', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ modIds: selectedMods }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Export failed');
+      }
+
+      // Create a blob from the response and download it
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `duckov-mods-export-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      alert(`Successfully exported ${selectedMods.length} mods`);
+      clearSelection();
+    } catch (error) {
+      console.error('Failed to export mods:', error);
+      alert('Failed to export mods. Check console for details.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exportFromCollection = async () => {
+    if (!collectionUrl.trim()) {
+      alert('Please enter a Steam Workshop collection URL');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch('/api/mods/export/collection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ collectionUrl }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Export failed');
+      }
+
+      // Create a blob from the response and download it
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `duckov-collection-export-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      alert('Successfully exported collection mods');
+      setCollectionUrl('');
+      setShowExportDialog(false);
+    } catch (error) {
+      console.error('Failed to export collection:', error);
+      alert(`Failed to export collection: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="App">
       <header className="app-header">
@@ -260,8 +363,58 @@ function App() {
               <span className="btn-icon">🔄</span>
               <span className="btn-text">Refresh</span>
             </button>
+            <button 
+              onClick={exportSelectedMods}
+              disabled={loading || selectedMods.length === 0}
+              className="btn btn-success"
+              title="Export selected mods as ZIP"
+            >
+              <span className="btn-icon">📦</span>
+              <span className="btn-text">Export Selected ({selectedMods.length})</span>
+            </button>
+            <button 
+              onClick={() => setShowExportDialog(!showExportDialog)}
+              disabled={loading}
+              className="btn btn-info"
+              title="Export mods from a Steam Workshop collection"
+            >
+              <span className="btn-icon">🌐</span>
+              <span className="btn-text">Export Collection</span>
+            </button>
           </div>
         </div>
+
+        {showExportDialog && (
+          <div className="export-dialog">
+            <h3>Export from Steam Workshop Collection</h3>
+            <p>Enter the URL of a Steam Workshop collection to export all mods from it.</p>
+            <div className="export-input-group">
+              <input
+                type="text"
+                value={collectionUrl}
+                onChange={(e) => setCollectionUrl(e.target.value)}
+                placeholder="https://steamcommunity.com/sharedfiles/filedetails/?id=XXXXXXXXX"
+                className="export-input"
+              />
+              <button 
+                onClick={exportFromCollection}
+                disabled={loading || !collectionUrl.trim()}
+                className="btn btn-primary"
+              >
+                Export Collection
+              </button>
+              <button 
+                onClick={() => {
+                  setShowExportDialog(false);
+                  setCollectionUrl('');
+                }}
+                className="btn btn-secondary"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {stats && <Statistics stats={stats} />}
 
@@ -373,6 +526,10 @@ function App() {
           mods={filteredMods} 
           loading={loading} 
           onSync={syncMods}
+          selectedMods={selectedMods}
+          onToggleSelect={toggleSelectMod}
+          onSelectAll={selectAllMods}
+          onClearSelection={clearSelection}
         />
       </main>
 

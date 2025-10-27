@@ -203,4 +203,48 @@ router.post('/translations/refresh', async (req, res, next) => {
   }
 });
 
+// Export selected mods as zip
+router.post('/export', async (req, res, next) => {
+  try {
+    const { modIds } = req.body;
+    
+    if (!Array.isArray(modIds) || modIds.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: 'modIds array is required and must not be empty'
+      });
+      return;
+    }
+    
+    logger.info(`Exporting ${modIds.length} selected mods`);
+    
+    // The response will be streamed, so we don't use res.json
+    await modService.exportMods(modIds, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Export mods from Steam Workshop collection URL
+router.post('/export/collection', async (req, res, next) => {
+  try {
+    const { collectionUrl } = req.body;
+    
+    if (!collectionUrl || typeof collectionUrl !== 'string') {
+      res.status(400).json({
+        success: false,
+        error: 'collectionUrl is required and must be a string'
+      });
+      return;
+    }
+    
+    logger.info(`Exporting mods from collection: ${collectionUrl}`);
+    
+    // The response will be streamed, so we don't use res.json
+    await modService.exportModsFromCollection(collectionUrl, res);
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

@@ -18,9 +18,21 @@ interface ModListProps {
   mods: ModInfo[];
   loading: boolean;
   onSync: (fileIds: string[]) => void;
+  selectedMods: string[];
+  onToggleSelect: (modId: string) => void;
+  onSelectAll: () => void;
+  onClearSelection: () => void;
 }
 
-const ModList: React.FC<ModListProps> = ({ mods, loading, onSync }) => {
+const ModList: React.FC<ModListProps> = ({ 
+  mods, 
+  loading, 
+  onSync,
+  selectedMods,
+  onToggleSelect,
+  onSelectAll,
+  onClearSelection
+}) => {
   const [syncInput, setSyncInput] = React.useState('');
   const [showSyncSection, setShowSyncSection] = React.useState(false);
 
@@ -63,13 +75,26 @@ const ModList: React.FC<ModListProps> = ({ mods, loading, onSync }) => {
   if (loading) {
     return (
       <div className="loading">
-        <p>Loading mods</p>
+        <p>Loading mods...</p>
       </div>
     );
   }
 
+  const allSelected = mods.length > 0 && selectedMods.length === mods.length;
+  const someSelected = selectedMods.length > 0 && selectedMods.length < mods.length;
+
   return (
     <div>
+      {selectedMods.length > 0 && (
+        <div className="selection-info">
+          <span>{selectedMods.length} mod{selectedMods.length > 1 ? 's' : ''} selected</span>
+          <div>
+            <button onClick={onSelectAll} className="btn btn-sm">Select All</button>
+            <button onClick={onClearSelection} className="btn btn-sm">Clear Selection</button>
+          </div>
+        </div>
+      )}
+
       {showSyncSection && (
         <div className="sync-section">
           <h3>🔄 Sync Mods from Steam Workshop</h3>
@@ -112,61 +137,88 @@ const ModList: React.FC<ModListProps> = ({ mods, loading, onSync }) => {
       )}
 
       {mods.length > 0 && (
-        <div className="mod-grid">
-          {mods.map((mod) => (
-            <div key={mod.id} className="mod-card">
-              {mod.previewUrl && (
-                <img 
-                  src={mod.previewUrl} 
-                  alt={mod.title}
-                  className="mod-preview"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              )}
-              
-              <div className="mod-content">
-                <div className="mod-title">{mod.title}</div>
-                <div className="mod-creator">by {mod.creator}</div>
-                
-                {mod.language && mod.language !== 'en' && (
-                  <div className="language-badge">
-                    {mod.language.toUpperCase()}
-                  </div>
-                )}
-                
-                <div className="mod-description">{mod.description}</div>
-                
-                <div className="mod-meta">
-                  <span title={`${mod.subscriptions.toLocaleString()} subscribers`}>
-                    👥 {formatSubscriptions(mod.subscriptions)}
-                  </span>
-                  <div className="mod-rating" title={`${mod.rating.toFixed(1)} out of 5 stars`}>
-                    {renderStars(mod.rating)} ({mod.rating.toFixed(1)})
-                  </div>
+        <>
+          <div className="bulk-selection">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                ref={(el) => el && (el.indeterminate = someSelected)}
+                onChange={() => allSelected ? onClearSelection() : onSelectAll()}
+              />
+              <span>{allSelected ? 'Deselect All' : 'Select All'}</span>
+            </label>
+          </div>
+          
+          <div className="mod-grid">
+            {mods.map((mod) => (
+              <div 
+                key={mod.id} 
+                className={`mod-card ${selectedMods.includes(mod.id) ? 'selected' : ''}`}
+                onClick={() => onToggleSelect(mod.id)}
+              >
+                <div className="mod-select-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={selectedMods.includes(mod.id)}
+                    onChange={() => onToggleSelect(mod.id)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
                 </div>
                 
-                {mod.tags.length > 0 && (
-                  <div className="mod-tags">
-                    {mod.tags.slice(0, 5).map((tag, index) => (
-                      <span key={index} className="tag">{tag}</span>
-                    ))}
-                    {mod.tags.length > 5 && (
-                      <span className="tag" title={mod.tags.slice(5).join(', ')}>
-                        +{mod.tags.length - 5}
-                      </span>
-                    )}
-                  </div>
+                {mod.previewUrl && (
+                  <img 
+                    src={mod.previewUrl} 
+                    alt={mod.title}
+                    className="mod-preview"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
                 )}
                 
-                <div style={{ fontSize: '0.8rem', color: '#7f8c8d', marginTop: 'auto', paddingTop: '0.5rem' }}>
-                  🕒 Updated {formatDate(mod.timeUpdated)}
+                <div className="mod-content">
+                  <div className="mod-title">{mod.title}</div>
+                  <div className="mod-creator">by {mod.creator}</div>
+                  
+                  {mod.language && mod.language !== 'en' && (
+                    <div className="language-badge">
+                      {mod.language.toUpperCase()}
+                    </div>
+                  )}
+                  
+                  <div className="mod-description">{mod.description}</div>
+                  
+                  <div className="mod-meta">
+                    <span title={`${mod.subscriptions.toLocaleString()} subscribers`}>
+                      👥 {formatSubscriptions(mod.subscriptions)}
+                    </span>
+                    <div className="mod-rating" title={`${mod.rating.toFixed(1)} out of 5 stars`}>
+                      {renderStars(mod.rating)} ({mod.rating.toFixed(1)})
+                    </div>
+                  </div>
+                  
+                  {mod.tags.length > 0 && (
+                    <div className="mod-tags">
+                      {mod.tags.slice(0, 5).map((tag, index) => (
+                        <span key={index} className="tag">{tag}</span>
+                      ))}
+                      {mod.tags.length > 5 && (
+                        <span className="tag" title={mod.tags.slice(5).join(', ')}>
+                          +{mod.tags.length - 5}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  
+                  <div style={{ fontSize: '0.8rem', color: '#7f8c8d', marginTop: 'auto', paddingTop: '0.5rem' }}>
+                    🕒 Updated {formatDate(mod.timeUpdated)}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

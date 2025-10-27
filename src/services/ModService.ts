@@ -4,6 +4,9 @@ import { TranslationService } from './TranslationService';
 import { LocalModService } from './LocalModService';
 import { ModInfo } from '../types';
 import { logger } from '../utils/logger';
+import archiver from 'archiver';
+import { Response } from 'express';
+import path from 'path';
 
 export class ModService {
   constructor(
@@ -371,5 +374,96 @@ export class ModService {
 
     logger.info(`Translation refresh complete. ${success} successful, ${errors} errors`);
     return { success, errors };
+  }
+
+  /**
+   * Exports selected mods as a zip file and streams to response
+   */
+  async exportMods(modIds: string[], res: Response): Promise<void> {
+    try {
+      logger.info(`Exporting ${modIds.length} mods`);
+      
+      // Verify all mods exist locally
+      const modPaths: { id: string; path: string }[] = [];
+      const missingMods: string[] = [];
+      
+      for (const modId of modIds) {
+        const exists = await this.localModService.modExists(modId);
+        if (exists) {
+          modPaths.push({
+            id: modId,
+            path: this.localModService.getModPath(modId)
+          });
+        } else {
+          missingMods.push(modId);
+        }
+      }
+      
+      if (missingMods.length > 0) {
+        logger.warn(`Missing local files for mods: ${missingMods.join(', ')}`);
+      }
+      
+      if (modPaths.length === 0) {
+        throw new Error('No local mod folders found for export');
+      }
+      
+      // Create zip archive
+      const archive = archiver('zip', {
+        zlib: { level: 9 } // Maximum compression
+      });
+      
+      // Set response headers for file download
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const filename = `duckov-mods-export-${timestamp}.zip`;
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      
+      // Pipe archive to response
+      archive.pipe(res);
+      
+      // Handle archive errors
+      archive.on('error', (err) => {
+        logger.error('Archive error:', err);
+        throw err;
+      });
+      
+      // Add each mod folder to the archive
+      for (const mod of modPaths) {
+        logger.debug(`Adding mod ${mod.id} to archive`);
+        archive.directory(mod.path, mod.id);
+      }
+      
+      // Finalize the archive
+      await archive.finalize();
+      
+      logger.info(`Export complete: ${modPaths.length} mods exported, ${missingMods.length} missing`);
+    } catch (error) {
+      logger.error('Failed to export mods:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Exports mods from a Steam Workshop collection URL
+   */
+  async exportModsFromCollection(collectionUrl: string, res: Response): Promise<void> {
+    try {
+      logger.info(`Exporting mods from collection: ${collectionUrl}`);
+      
+      // Get mod IDs from the collection
+      const modIds = await this.steamService.getCollectionItems(collectionUrl);
+      
+      if (modIds.length === 0) {
+        throw new Error('No mods found in collection');
+      }
+      
+      logger.info(`Found ${modIds.length} mods in collection`);
+      
+      // Export using the standard export method
+      await this.exportMods(modIds, res);
+    } catch (error) {
+      logger.error('Failed to export collection:', error);
+      throw error;
+    }
   }
 }

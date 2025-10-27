@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { logger } from '../utils/logger';
 import { SteamWorkshopItem, SteamWorkshopResponse, ModInfo } from '../types';
+import * as cheerio from 'cheerio';
 
 export class SteamWorkshopService {
   private apiKey: string;
@@ -142,6 +143,67 @@ export class SteamWorkshopService {
     } catch (error) {
       logger.error('Steam API validation failed:', error);
       return { valid: false, message: 'Failed to connect to Steam API' };
+    }
+  }
+
+  /**
+   * Extracts mod IDs from a Steam Workshop collection URL
+   */
+  async getCollectionItems(collectionUrl: string): Promise<string[]> {
+    try {
+      logger.info(`Fetching collection from URL: ${collectionUrl}`);
+      
+      // Extract collection ID from URL
+      const collectionIdMatch = collectionUrl.match(/\?id=(\d+)/);
+      if (!collectionIdMatch) {
+        throw new Error('Invalid collection URL format. Expected format: https://steamcommunity.com/sharedfiles/filedetails/?id=XXXXXXXXX');
+      }
+      
+      const collectionId = collectionIdMatch[1];
+      
+      // Fetch the collection page
+      const response = await axios.get(collectionUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        timeout: 30000
+      });
+      
+      const $ = cheerio.load(response.data);
+      const modIds: string[] = [];
+      
+      // Find all workshop item links in the collection
+      $('.collectionItemDetails a').each((_, element) => {
+        const href = $(element).attr('href');
+        if (href) {
+          const modIdMatch = href.match(/\?id=(\d+)/);
+          if (modIdMatch) {
+            modIds.push(modIdMatch[1]);
+          }
+        }
+      });
+      
+      // Alternative selector if the first one doesn't work
+      if (modIds.length === 0) {
+        $('.workshopItem').each((_, element) => {
+          const href = $(element).find('a').attr('href');
+          if (href) {
+            const modIdMatch = href.match(/\?id=(\d+)/);
+            if (modIdMatch) {
+              modIds.push(modIdMatch[1]);
+            }
+          }
+        });
+      }
+      
+      // Remove duplicates
+      const uniqueModIds = [...new Set(modIds)];
+      
+      logger.info(`Found ${uniqueModIds.length} mods in collection ${collectionId}`);
+      return uniqueModIds;
+    } catch (error) {
+      logger.error('Failed to fetch collection items:', error);
+      throw error;
     }
   }
 }
