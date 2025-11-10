@@ -98,4 +98,13 @@ typings/
 # DynamoDB Local files
 .dynamodb/
 
+# Electron build output
+release/
+dist/
+out/
+
+# Electron builder files
+dist-electron/
+.electron-builder/
+
 package-lock.json
