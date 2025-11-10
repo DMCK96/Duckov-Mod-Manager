@@ -7,25 +7,43 @@ exports.LocalModService = void 0;
 const fs_1 = require("fs");
 const path_1 = __importDefault(require("path"));
 const logger_1 = require("../utils/logger");
+/**
+ * LocalModService - Manages local mod folder scanning and operations
+ *
+ * Electron Considerations:
+ * - Works entirely with local file system (no HTTP/network dependencies)
+ * - Uses Node.js fs APIs which are fully supported in Electron main process
+ * - Workshop path should be configured via environment variable or settings
+ * - All operations are async and non-blocking
+ */
 class LocalModService {
-    constructor() {
-        this.workshopPath = process.env.WORKSHOP_DATA_PATH || '';
+    constructor(workshopPath) {
+        // Allow workshop path to be passed in constructor for Electron flexibility
+        this.workshopPath = workshopPath || process.env.WORKSHOP_DATA_PATH || '';
         if (!this.workshopPath) {
-            logger_1.logger.warn('Workshop data path not configured. Please set WORKSHOP_DATA_PATH in environment variables.');
+            logger_1.logger.warn('Workshop data path not configured. Please set WORKSHOP_DATA_PATH or pass to constructor.');
+        }
+        else {
+            logger_1.logger.info(`LocalModService initialized with workshop path: ${this.workshopPath}`);
         }
     }
+    /**
+     * Scans the workshop data folder and returns all mod IDs found
+     */
     async scanLocalMods() {
         if (!this.workshopPath) {
             throw new Error('Workshop data path not configured');
         }
         try {
+            // Check if path exists
             await fs_1.promises.access(this.workshopPath);
             logger_1.logger.info(`Scanning workshop folder: ${this.workshopPath}`);
             const entries = await fs_1.promises.readdir(this.workshopPath, { withFileTypes: true });
+            // Filter for directories that have numeric names (mod IDs)
             const modIds = entries
                 .filter(entry => entry.isDirectory())
                 .map(entry => entry.name)
-                .filter(name => /^\d+$/.test(name));
+                .filter(name => /^\d+$/.test(name)); // Only numeric folder names
             logger_1.logger.info(`Found ${modIds.length} local mods`);
             return modIds;
         }
@@ -37,9 +55,15 @@ class LocalModService {
             throw error;
         }
     }
+    /**
+     * Gets the full path for a specific mod
+     */
     getModPath(modId) {
         return path_1.default.join(this.workshopPath, modId);
     }
+    /**
+     * Checks if a mod exists locally
+     */
     async modExists(modId) {
         if (!this.workshopPath) {
             return false;
@@ -53,6 +77,9 @@ class LocalModService {
             return false;
         }
     }
+    /**
+     * Gets information about a local mod folder (file count, size, etc.)
+     */
     async getModFolderInfo(modId) {
         const modPath = this.getModPath(modId);
         try {
@@ -64,6 +91,7 @@ class LocalModService {
                     exists: false
                 };
             }
+            // Count files recursively
             const { fileCount, totalSize } = await this.calculateFolderStats(modPath);
             return {
                 modId,
@@ -82,6 +110,9 @@ class LocalModService {
             };
         }
     }
+    /**
+     * Recursively calculates folder statistics
+     */
     async calculateFolderStats(folderPath) {
         let fileCount = 0;
         let totalSize = 0;
@@ -106,13 +137,22 @@ class LocalModService {
         }
         return { fileCount, totalSize };
     }
+    /**
+     * Updates the workshop path configuration
+     */
     setWorkshopPath(path) {
         this.workshopPath = path;
         logger_1.logger.info(`Workshop data path updated to: ${path}`);
     }
+    /**
+     * Gets the current workshop path
+     */
     getWorkshopPath() {
         return this.workshopPath;
     }
+    /**
+     * Validates the workshop path configuration
+     */
     async validateConfiguration() {
         if (!this.workshopPath) {
             return { valid: false, message: 'Workshop data path not configured' };

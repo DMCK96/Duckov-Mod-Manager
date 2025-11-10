@@ -3,13 +3,36 @@ import { logger } from '../utils/logger';
 import { ModInfo, CachedTranslation } from '../types';
 import path from 'path';
 import fs from 'fs';
+import { app } from 'electron';
 
+/**
+ * Database - SQLite database manager for mod and translation data
+ *
+ * Electron Considerations:
+ * - Uses app.getPath('userData') for database location in production
+ * - Falls back to './data' for development/testing
+ * - All operations are async and non-blocking
+ * - Thread-safe for use in Electron main process
+ */
 export class Database {
   private db: sqlite3.Database | null = null;
   private dbPath: string;
 
   constructor() {
-    this.dbPath = process.env.DB_PATH || './data/mods.db';
+    // Use Electron's userData directory in production, fallback to ./data in development
+    // This ensures database is stored in the correct location for Electron apps
+    const isElectronApp = typeof app !== 'undefined' && app.getPath;
+
+    if (isElectronApp) {
+      const userDataPath = app.getPath('userData');
+      this.dbPath = path.join(userDataPath, 'mods.db');
+      logger.info(`Database will be stored in Electron userData: ${this.dbPath}`);
+    } else {
+      // Fallback for testing/development without Electron
+      this.dbPath = process.env.DB_PATH || './data/mods.db';
+      logger.info(`Database will be stored in: ${this.dbPath}`);
+    }
+
     this.ensureDataDirectory();
   }
 
@@ -216,14 +239,14 @@ export class Database {
 
   async getTranslation(originalText: string, sourceLang: string, targetLang: string): Promise<CachedTranslation | null> {
     const query = `
-      SELECT * FROM translations 
+      SELECT * FROM translations
       WHERE original_text = ? AND source_lang = ? AND target_lang = ? AND expires_at > CURRENT_TIMESTAMP
     `;
-    
+
     const row = await this.getQuery(query, [originalText, sourceLang, targetLang]);
-    
+
     if (!row) return null;
-    
+
     return {
       originalText: row.original_text,
       translatedText: row.translated_text,
@@ -234,9 +257,80 @@ export class Database {
     };
   }
 
-  async cleanExpiredTranslations(): Promise<void> {
+  /**
+   * Saves a translation to the database cache
+   * Simpler interface for OfflineTranslationService
+   *
+   * @param text - Original text
+   * @param translation - Translated text
+   * @param sourceLang - Source language code
+   * @param targetLang - Target language code
+   */
+  async saveTranslation(text: string, translation: string, sourceLang: string, targetLang: string): Promise<void> {
+    const cacheExpiryDays = parseInt(process.env.TRANSLATION_CACHE_TTL_DAYS || '30');
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + cacheExpiryDays);
+
+    const query = `
+      INSERT OR REPLACE INTO translations (
+        original_text, translated_text, source_lang, target_lang, expires_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `;
+
+    const params = [
+      text,
+      translation,
+      sourceLang,
+      targetLang,
+      expiresAt.toISOString()
+    ];
+
+    await this.runQuery(query, params);
+  }
+
+  /**
+   * Gets the total count of cached translations
+   * Useful for statistics and monitoring
+   *
+   * @returns Number of non-expired translations in cache
+   */
+  async getTranslationCount(): Promise<number> {
+    const query = 'SELECT COUNT(*) as count FROM translations WHERE expires_at > CURRENT_TIMESTAMP';
+    const row = await this.getQuery(query);
+    return row ? row.count : 0;
+  }
+
+  /**
+   * Clears expired translations from the database
+   * Returns the number of deleted entries
+   *
+   * @returns Number of translations deleted
+   */
+  async clearExpiredTranslations(): Promise<number> {
     const query = 'DELETE FROM translations WHERE expires_at < CURRENT_TIMESTAMP';
-    await this.runQuery(query);
+    const result = await this.runQuery(query);
+    return result.changes || 0;
+  }
+
+  /**
+   * Clears ALL translations from the database (including non-expired)
+   * Use with caution - this will force retranslation of all content
+   *
+   * @returns Number of translations deleted
+   */
+  async clearAllTranslations(): Promise<number> {
+    const query = 'DELETE FROM translations';
+    const result = await this.runQuery(query);
+    logger.warn(`Cleared all translations from cache: ${result.changes || 0} entries deleted`);
+    return result.changes || 0;
+  }
+
+  /**
+   * Legacy method - kept for backward compatibility
+   * @deprecated Use clearExpiredTranslations() instead
+   */
+  async cleanExpiredTranslations(): Promise<void> {
+    await this.clearExpiredTranslations();
   }
 
   private mapRowToMod(row: any): ModInfo {

@@ -2,14 +2,26 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger';
 
+/**
+ * LocalModService - Manages local mod folder scanning and operations
+ *
+ * Electron Considerations:
+ * - Works entirely with local file system (no HTTP/network dependencies)
+ * - Uses Node.js fs APIs which are fully supported in Electron main process
+ * - Workshop path should be configured via environment variable or settings
+ * - All operations are async and non-blocking
+ */
 export class LocalModService {
   private workshopPath: string;
 
-  constructor() {
-    this.workshopPath = process.env.WORKSHOP_DATA_PATH || '';
-    
+  constructor(workshopPath?: string) {
+    // Allow workshop path to be passed in constructor for Electron flexibility
+    this.workshopPath = workshopPath || process.env.WORKSHOP_DATA_PATH || '';
+
     if (!this.workshopPath) {
-      logger.warn('Workshop data path not configured. Please set WORKSHOP_DATA_PATH in environment variables.');
+      logger.warn('Workshop data path not configured. Please set WORKSHOP_DATA_PATH or pass to constructor.');
+    } else {
+      logger.info(`LocalModService initialized with workshop path: ${this.workshopPath}`);
     }
   }
 

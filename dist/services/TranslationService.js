@@ -9,9 +9,17 @@ const node_cache_1 = __importDefault(require("node-cache"));
 const logger_1 = require("../utils/logger");
 class TranslationService {
     constructor(database) {
+        this.lastRequestTime = 0;
+        this.requestCountPerMinute = 0;
+        this.requestCountPerSecond = 0;
+        this.lastSecondTimestamp = 0;
+        this.MIN_REQUEST_INTERVAL = 1000; // 1 second between requests
+        this.MAX_REQUESTS_PER_MINUTE = 50; // Conservative limit for per-minute
+        this.MAX_REQUESTS_PER_SECOND = 45; // DeepL limit is 50/second (per engineers), use 45 for safety
         this.apiKey = process.env.DEEPL_API_KEY || '';
         this.apiUrl = process.env.DEEPL_API_URL || 'https://api-free.deepl.com/v2/translate';
         this.database = database;
+        // In-memory cache for quick access (1 hour TTL)
         this.cache = new node_cache_1.default({ stdTTL: 3600, checkperiod: 600 });
         if (!this.apiKey) {
             logger_1.logger.warn('DeepL API key not configured. Translation features will be disabled.');
@@ -22,11 +30,13 @@ class TranslationService {
             throw new Error('DeepL API key not configured');
         }
         const cacheKey = `${request.text}_${request.sourceLang || 'auto'}_${request.targetLang}`;
+        // Check in-memory cache first
         const cachedResult = this.cache.get(cacheKey);
         if (cachedResult) {
             logger_1.logger.debug('Translation found in memory cache');
             return cachedResult;
         }
+        // Check database cache
         if (this.database) {
             const dbCached = await this.database.getTranslation(request.text, request.sourceLang || 'auto', request.targetLang);
             if (dbCached) {
@@ -35,66 +45,146 @@ class TranslationService {
                     translatedText: dbCached.translatedText,
                     detectedLanguage: dbCached.sourceLang !== 'auto' ? dbCached.sourceLang : undefined
                 };
+                // Store in memory cache for quick access
                 this.cache.set(cacheKey, response);
                 return response;
             }
         }
+        // Perform actual translation
         try {
             const translationResponse = await this.performTranslation(request);
+            // Cache the result
             this.cache.set(cacheKey, translationResponse);
+            // Store in database for long-term caching
             if (this.database) {
                 await this.saveToDatabaseCache(request, translationResponse);
             }
             return translationResponse;
         }
         catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
             logger_1.logger.error('Translation failed:', error);
-            throw error;
+            throw new Error(`Translation failed: ${errorMessage}`);
         }
     }
+    async waitForRateLimit() {
+        const now = Date.now();
+        const timeSinceLastRequest = now - this.lastRequestTime;
+        const currentSecond = Math.floor(now / 1000);
+        // Reset per-second counter when we enter a new second
+        if (currentSecond !== this.lastSecondTimestamp) {
+            this.lastSecondTimestamp = currentSecond;
+            this.requestCountPerSecond = 0;
+        }
+        // Reset per-minute counter every minute
+        if (timeSinceLastRequest > 60000) {
+            this.requestCountPerMinute = 0;
+        }
+        // Check per-second limit (50 requests/second according to DeepL engineers)
+        if (this.requestCountPerSecond >= this.MAX_REQUESTS_PER_SECOND) {
+            const waitTime = 1000 - (now % 1000); // Wait until next second
+            logger_1.logger.info(`Per-second rate limit reached (${this.MAX_REQUESTS_PER_SECOND}/s). Waiting ${waitTime}ms...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            this.lastSecondTimestamp = Math.floor(Date.now() / 1000);
+            this.requestCountPerSecond = 0;
+        }
+        // Check per-minute limit
+        if (this.requestCountPerMinute >= this.MAX_REQUESTS_PER_MINUTE) {
+            const waitTime = 60000 - timeSinceLastRequest;
+            if (waitTime > 0) {
+                logger_1.logger.info(`Per-minute rate limit reached (${this.MAX_REQUESTS_PER_MINUTE}/min). Waiting ${Math.ceil(waitTime / 1000)}s...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                this.requestCountPerMinute = 0;
+            }
+        }
+        // Ensure minimum interval between requests (currently 1 second)
+        if (timeSinceLastRequest < this.MIN_REQUEST_INTERVAL) {
+            const waitTime = this.MIN_REQUEST_INTERVAL - timeSinceLastRequest;
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+        this.lastRequestTime = Date.now();
+        this.requestCountPerMinute++;
+        this.requestCountPerSecond++;
+    }
+    async retryWithBackoff(operation, maxRetries = 3, baseDelay = 1000) {
+        let lastError;
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                return await operation();
+            }
+            catch (error) {
+                lastError = error;
+                // Check if it's a rate limit error
+                const isRateLimit = axios_1.default.isAxiosError(error) && error.response?.status === 429;
+                if (!isRateLimit || attempt === maxRetries) {
+                    throw error;
+                }
+                // Exponential backoff: 1s, 2s, 4s
+                const delay = baseDelay * Math.pow(2, attempt);
+                logger_1.logger.warn(`Rate limited. Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+        throw lastError;
+    }
     async performTranslation(request) {
-        const params = new URLSearchParams({
-            auth_key: this.apiKey,
-            text: request.text,
+        // Build the request body according to DeepL API v2 spec
+        const requestBody = {
+            text: [request.text], // DeepL expects an array of texts
             target_lang: request.targetLang.toUpperCase()
-        });
+        };
         if (request.sourceLang && request.sourceLang !== 'auto') {
-            params.append('source_lang', request.sourceLang.toUpperCase());
+            requestBody.source_lang = request.sourceLang.toUpperCase();
         }
-        try {
-            const response = await axios_1.default.post(this.apiUrl, params, {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                timeout: 30000
-            });
-            if (!response.data.translations || response.data.translations.length === 0) {
-                throw new Error('No translation returned from DeepL API');
+        logger_1.logger.debug(`Translating text (${request.text.length} chars) to ${request.targetLang}`);
+        // Apply rate limiting
+        await this.waitForRateLimit();
+        // Wrap API call with retry logic
+        return await this.retryWithBackoff(async () => {
+            try {
+                const response = await axios_1.default.post(this.apiUrl, requestBody, {
+                    headers: {
+                        'Authorization': `DeepL-Auth-Key ${this.apiKey}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Duckov-Mod-Manager/1.0.0'
+                    },
+                    timeout: 30000
+                });
+                if (!response.data || !response.data.translations || response.data.translations.length === 0) {
+                    throw new Error('No translation returned from DeepL API');
+                }
+                const translation = response.data.translations[0];
+                if (!translation.text) {
+                    throw new Error('Translation text is missing in DeepL API response');
+                }
+                return {
+                    translatedText: translation.text,
+                    detectedLanguage: translation.detected_source_language?.toLowerCase(),
+                    confidence: 1.0 // DeepL doesn't provide confidence scores
+                };
             }
-            const translation = response.data.translations[0];
-            return {
-                translatedText: translation.text,
-                detectedLanguage: translation.detected_source_language?.toLowerCase(),
-                confidence: 1.0
-            };
-        }
-        catch (error) {
-            if (axios_1.default.isAxiosError(error)) {
-                const status = error.response?.status;
-                const message = error.response?.data?.message || error.message;
-                if (status === 403) {
-                    throw new Error('DeepL API authentication failed. Check your API key.');
+            catch (error) {
+                if (axios_1.default.isAxiosError(error)) {
+                    const status = error.response?.status;
+                    const message = error.response?.data?.message || error.message;
+                    logger_1.logger.error(`DeepL API error - Status: ${status}, Message:`, message);
+                    if (status === 403) {
+                        throw new Error('DeepL API authentication failed. Check your API key.');
+                    }
+                    else if (status === 456) {
+                        throw new Error('DeepL API quota exceeded.');
+                    }
+                    else if (status === 429) {
+                        throw new Error('DeepL API rate limit exceeded. Please try again later.');
+                    }
+                    throw new Error(`DeepL API error (${status}): ${message}`);
                 }
-                else if (status === 456) {
-                    throw new Error('DeepL API quota exceeded.');
-                }
-                else if (status === 429) {
-                    throw new Error('DeepL API rate limit exceeded. Please try again later.');
-                }
-                throw new Error(`DeepL API error (${status}): ${message}`);
+                // Handle non-axios errors
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                logger_1.logger.error('Unexpected translation error:', error);
+                throw new Error(`Translation request failed: ${errorMessage}`);
             }
-            throw error;
-        }
+        });
     }
     async saveToDatabaseCache(request, response) {
         if (!this.database)
@@ -118,36 +208,136 @@ class TranslationService {
         }
     }
     async translateModContent(title, description, targetLang = 'en') {
-        const results = await Promise.allSettled([
-            this.translate({ text: title, targetLang }),
-            this.translate({ text: description, targetLang })
-        ]);
-        const titleResult = results[0];
-        const descriptionResult = results[1];
-        let translatedTitle = title;
-        let translatedDescription = description;
-        let detectedLanguage;
-        if (titleResult.status === 'fulfilled') {
-            translatedTitle = titleResult.value.translatedText;
-            detectedLanguage = titleResult.value.detectedLanguage;
+        // Optimize by batching both texts in a single API call
+        try {
+            const batchResult = await this.translateBatch([title, description], targetLang);
+            return {
+                translatedTitle: batchResult.translations[0]?.translatedText || title,
+                translatedDescription: batchResult.translations[1]?.translatedText || description,
+                detectedLanguage: batchResult.translations[0]?.detectedLanguage
+            };
         }
-        else {
-            logger_1.logger.error('Title translation failed:', titleResult.reason);
-        }
-        if (descriptionResult.status === 'fulfilled') {
-            translatedDescription = descriptionResult.value.translatedText;
-            if (!detectedLanguage) {
-                detectedLanguage = descriptionResult.value.detectedLanguage;
+        catch (error) {
+            logger_1.logger.error('Batch translation failed, falling back to individual translations:', error);
+            // Fallback to individual translations if batch fails
+            const results = await Promise.allSettled([
+                this.translate({ text: title, targetLang }),
+                this.translate({ text: description, targetLang })
+            ]);
+            const titleResult = results[0];
+            const descriptionResult = results[1];
+            let translatedTitle = title;
+            let translatedDescription = description;
+            let detectedLanguage;
+            if (titleResult.status === 'fulfilled') {
+                translatedTitle = titleResult.value.translatedText;
+                detectedLanguage = titleResult.value.detectedLanguage;
             }
+            else {
+                const errorMessage = titleResult.reason instanceof Error
+                    ? titleResult.reason.message
+                    : String(titleResult.reason);
+                logger_1.logger.error(`Title translation failed: ${errorMessage}`, titleResult.reason);
+            }
+            if (descriptionResult.status === 'fulfilled') {
+                translatedDescription = descriptionResult.value.translatedText;
+                if (!detectedLanguage) {
+                    detectedLanguage = descriptionResult.value.detectedLanguage;
+                }
+            }
+            else {
+                const errorMessage = descriptionResult.reason instanceof Error
+                    ? descriptionResult.reason.message
+                    : String(descriptionResult.reason);
+                logger_1.logger.error(`Description translation failed: ${errorMessage}`, descriptionResult.reason);
+            }
+            return {
+                translatedTitle,
+                translatedDescription,
+                detectedLanguage
+            };
         }
-        else {
-            logger_1.logger.error('Description translation failed:', descriptionResult.reason);
+    }
+    async translateBatch(texts, targetLang, sourceLang) {
+        if (!this.apiKey) {
+            throw new Error('DeepL API key not configured');
         }
-        return {
-            translatedTitle,
-            translatedDescription,
-            detectedLanguage
+        if (texts.length === 0) {
+            return { translations: [] };
+        }
+        // Check cache for all texts
+        const cacheKeys = texts.map(text => `${text}_${sourceLang || 'auto'}_${targetLang}`);
+        const cachedResults = cacheKeys.map(key => this.cache.get(key) || null);
+        // If all are cached, return immediately
+        if (cachedResults.every(result => result !== null)) {
+            logger_1.logger.debug('All translations found in cache');
+            return {
+                translations: cachedResults.map(r => ({
+                    translatedText: r.translatedText,
+                    detectedLanguage: r.detectedLanguage
+                }))
+            };
+        }
+        // Build request for uncached texts
+        const requestBody = {
+            text: texts,
+            target_lang: targetLang.toUpperCase()
         };
+        if (sourceLang && sourceLang !== 'auto') {
+            requestBody.source_lang = sourceLang.toUpperCase();
+        }
+        logger_1.logger.debug(`Batch translating ${texts.length} texts (${texts.reduce((sum, t) => sum + t.length, 0)} total chars) to ${targetLang}`);
+        // Apply rate limiting
+        await this.waitForRateLimit();
+        // Wrap API call with retry logic
+        return await this.retryWithBackoff(async () => {
+            try {
+                const response = await axios_1.default.post(this.apiUrl, requestBody, {
+                    headers: {
+                        'Authorization': `DeepL-Auth-Key ${this.apiKey}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Duckov-Mod-Manager/1.0.0'
+                    },
+                    timeout: 30000
+                });
+                if (!response.data || !response.data.translations || response.data.translations.length === 0) {
+                    throw new Error('No translations returned from DeepL API');
+                }
+                const translations = response.data.translations.map((translation, index) => {
+                    if (!translation.text) {
+                        throw new Error(`Translation text is missing for item ${index}`);
+                    }
+                    const result = {
+                        translatedText: translation.text,
+                        detectedLanguage: translation.detected_source_language?.toLowerCase()
+                    };
+                    // Cache each result
+                    this.cache.set(cacheKeys[index], result);
+                    return result;
+                });
+                return { translations };
+            }
+            catch (error) {
+                if (axios_1.default.isAxiosError(error)) {
+                    const status = error.response?.status;
+                    const message = error.response?.data?.message || error.message;
+                    logger_1.logger.error(`DeepL API error - Status: ${status}, Message:`, message);
+                    if (status === 403) {
+                        throw new Error('DeepL API authentication failed. Check your API key.');
+                    }
+                    else if (status === 456) {
+                        throw new Error('DeepL API quota exceeded.');
+                    }
+                    else if (status === 429) {
+                        throw new Error('DeepL API rate limit exceeded. Please try again later.');
+                    }
+                    throw new Error(`DeepL API error (${status}): ${message}`);
+                }
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                logger_1.logger.error('Unexpected batch translation error:', error);
+                throw new Error(`Batch translation request failed: ${errorMessage}`);
+            }
+        });
     }
     async getSupportedLanguages() {
         if (!this.apiKey) {
@@ -165,6 +355,7 @@ class TranslationService {
         }
         catch (error) {
             logger_1.logger.error('Failed to fetch supported languages:', error);
+            // Return common languages as fallback
             return ['en', 'de', 'fr', 'es', 'it', 'ja', 'ko', 'zh'];
         }
     }
@@ -173,6 +364,7 @@ class TranslationService {
             return { valid: false, message: 'DeepL API key not configured' };
         }
         try {
+            // Test API with a simple translation
             await this.performTranslation({
                 text: 'Hello',
                 targetLang: 'de'

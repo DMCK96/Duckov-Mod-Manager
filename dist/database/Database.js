@@ -8,10 +8,32 @@ const sqlite3_1 = __importDefault(require("sqlite3"));
 const logger_1 = require("../utils/logger");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+const electron_1 = require("electron");
+/**
+ * Database - SQLite database manager for mod and translation data
+ *
+ * Electron Considerations:
+ * - Uses app.getPath('userData') for database location in production
+ * - Falls back to './data' for development/testing
+ * - All operations are async and non-blocking
+ * - Thread-safe for use in Electron main process
+ */
 class Database {
     constructor() {
         this.db = null;
-        this.dbPath = process.env.DB_PATH || './data/mods.db';
+        // Use Electron's userData directory in production, fallback to ./data in development
+        // This ensures database is stored in the correct location for Electron apps
+        const isElectronApp = typeof electron_1.app !== 'undefined' && electron_1.app.getPath;
+        if (isElectronApp) {
+            const userDataPath = electron_1.app.getPath('userData');
+            this.dbPath = path_1.default.join(userDataPath, 'mods.db');
+            logger_1.logger.info(`Database will be stored in Electron userData: ${this.dbPath}`);
+        }
+        else {
+            // Fallback for testing/development without Electron
+            this.dbPath = process.env.DB_PATH || './data/mods.db';
+            logger_1.logger.info(`Database will be stored in: ${this.dbPath}`);
+        }
         this.ensureDataDirectory();
     }
     ensureDataDirectory() {
@@ -196,7 +218,7 @@ class Database {
     }
     async getTranslation(originalText, sourceLang, targetLang) {
         const query = `
-      SELECT * FROM translations 
+      SELECT * FROM translations
       WHERE original_text = ? AND source_lang = ? AND target_lang = ? AND expires_at > CURRENT_TIMESTAMP
     `;
         const row = await this.getQuery(query, [originalText, sourceLang, targetLang]);
@@ -211,15 +233,82 @@ class Database {
             expiresAt: new Date(row.expires_at)
         };
     }
-    async cleanExpiredTranslations() {
+    /**
+     * Saves a translation to the database cache
+     * Simpler interface for OfflineTranslationService
+     *
+     * @param text - Original text
+     * @param translation - Translated text
+     * @param sourceLang - Source language code
+     * @param targetLang - Target language code
+     */
+    async saveTranslation(text, translation, sourceLang, targetLang) {
+        const cacheExpiryDays = parseInt(process.env.TRANSLATION_CACHE_TTL_DAYS || '30');
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + cacheExpiryDays);
+        const query = `
+      INSERT OR REPLACE INTO translations (
+        original_text, translated_text, source_lang, target_lang, expires_at
+      ) VALUES (?, ?, ?, ?, ?)
+    `;
+        const params = [
+            text,
+            translation,
+            sourceLang,
+            targetLang,
+            expiresAt.toISOString()
+        ];
+        await this.runQuery(query, params);
+    }
+    /**
+     * Gets the total count of cached translations
+     * Useful for statistics and monitoring
+     *
+     * @returns Number of non-expired translations in cache
+     */
+    async getTranslationCount() {
+        const query = 'SELECT COUNT(*) as count FROM translations WHERE expires_at > CURRENT_TIMESTAMP';
+        const row = await this.getQuery(query);
+        return row ? row.count : 0;
+    }
+    /**
+     * Clears expired translations from the database
+     * Returns the number of deleted entries
+     *
+     * @returns Number of translations deleted
+     */
+    async clearExpiredTranslations() {
         const query = 'DELETE FROM translations WHERE expires_at < CURRENT_TIMESTAMP';
-        await this.runQuery(query);
+        const result = await this.runQuery(query);
+        return result.changes || 0;
+    }
+    /**
+     * Clears ALL translations from the database (including non-expired)
+     * Use with caution - this will force retranslation of all content
+     *
+     * @returns Number of translations deleted
+     */
+    async clearAllTranslations() {
+        const query = 'DELETE FROM translations';
+        const result = await this.runQuery(query);
+        logger_1.logger.warn(`Cleared all translations from cache: ${result.changes || 0} entries deleted`);
+        return result.changes || 0;
+    }
+    /**
+     * Legacy method - kept for backward compatibility
+     * @deprecated Use clearExpiredTranslations() instead
+     */
+    async cleanExpiredTranslations() {
+        await this.clearExpiredTranslations();
     }
     mapRowToMod(row) {
+        // Use translated content if available, otherwise use original
+        const title = row.translated_title || row.title;
+        const description = row.translated_description || row.description;
         return {
             id: row.id,
-            title: row.title,
-            description: row.description,
+            title: title,
+            description: description,
             originalTitle: row.original_title,
             originalDescription: row.original_description,
             translatedTitle: row.translated_title,

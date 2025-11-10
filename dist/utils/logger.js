@@ -4,7 +4,21 @@ exports.logger = exports.Logger = void 0;
 class Logger {
     formatMessage(level, message, ...args) {
         const timestamp = new Date().toISOString();
-        const formattedArgs = args.length > 0 ? ' ' + args.map(arg => typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)).join(' ') : '';
+        const formattedArgs = args.length > 0 ? ' ' + args.map(arg => {
+            if (arg instanceof Error) {
+                return `${arg.name}: ${arg.message}\n${arg.stack || ''}`;
+            }
+            else if (typeof arg === 'object' && arg !== null) {
+                // For objects, try to stringify with error handling
+                try {
+                    return JSON.stringify(arg, null, 2);
+                }
+                catch {
+                    return String(arg);
+                }
+            }
+            return String(arg);
+        }).join(' ') : '';
         return `[${timestamp}] [${level.toUpperCase()}] ${message}${formattedArgs}`;
     }
     info(message, ...args) {
