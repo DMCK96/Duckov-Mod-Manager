@@ -132,3 +132,5 @@ web/dist/
 *.tsbuildinfo
 
 package-lock.json
+
+.claude/
