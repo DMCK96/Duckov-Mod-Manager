@@ -4,25 +4,33 @@ import './Settings.css';
 interface SettingsProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (workshopPath: string) => void;
+  onSave: (workshopPath: string, duckovGamePath: string) => void;
   currentWorkshopPath: string;
+  currentDuckovGamePath: string;
 }
 
-function Settings({ isOpen, onClose, onSave, currentWorkshopPath }: SettingsProps) {
+function Settings({ isOpen, onClose, onSave, currentWorkshopPath, currentDuckovGamePath }: SettingsProps) {
   const [workshopPath, setWorkshopPath] = useState(currentWorkshopPath);
+  const [duckovGamePath, setDuckovGamePath] = useState(currentDuckovGamePath);
   const [hasChanges, setHasChanges] = useState(false);
 
   useEffect(() => {
     setWorkshopPath(currentWorkshopPath);
+    setDuckovGamePath(currentDuckovGamePath);
     setHasChanges(false);
-  }, [currentWorkshopPath, isOpen]);
+  }, [currentWorkshopPath, currentDuckovGamePath, isOpen]);
 
-  const handlePathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleWorkshopPathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setWorkshopPath(e.target.value);
-    setHasChanges(e.target.value !== currentWorkshopPath);
+    setHasChanges(e.target.value !== currentWorkshopPath || duckovGamePath !== currentDuckovGamePath);
   };
 
-  const handleBrowse = async () => {
+  const handleDuckovGamePathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDuckovGamePath(e.target.value);
+    setHasChanges(workshopPath !== currentWorkshopPath || e.target.value !== currentDuckovGamePath);
+  };
+
+  const handleBrowseWorkshop = async () => {
     try {
       if (window.electronAPI?.showOpenDialog) {
         const result = await window.electronAPI.showOpenDialog({
@@ -32,7 +40,26 @@ function Settings({ isOpen, onClose, onSave, currentWorkshopPath }: SettingsProp
 
         if (!result.canceled && result.filePaths.length > 0) {
           setWorkshopPath(result.filePaths[0]);
-          setHasChanges(result.filePaths[0] !== currentWorkshopPath);
+          setHasChanges(result.filePaths[0] !== currentWorkshopPath || duckovGamePath !== currentDuckovGamePath);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to open directory dialog:', error);
+      alert('Failed to open directory selection dialog');
+    }
+  };
+
+  const handleBrowseDuckovGame = async () => {
+    try {
+      if (window.electronAPI?.showOpenDialog) {
+        const result = await window.electronAPI.showOpenDialog({
+          title: 'Select Duckov Game Folder (Escape from Duckov)',
+          properties: ['openDirectory']
+        });
+
+        if (!result.canceled && result.filePaths.length > 0) {
+          setDuckovGamePath(result.filePaths[0]);
+          setHasChanges(workshopPath !== currentWorkshopPath || result.filePaths[0] !== currentDuckovGamePath);
         }
       }
     } catch (error) {
@@ -43,7 +70,7 @@ function Settings({ isOpen, onClose, onSave, currentWorkshopPath }: SettingsProp
 
   const handleSave = () => {
     if (workshopPath.trim()) {
-      onSave(workshopPath.trim());
+      onSave(workshopPath.trim(), duckovGamePath.trim());
       setHasChanges(false);
     } else {
       alert('Please select a valid workshop data folder');
@@ -52,6 +79,7 @@ function Settings({ isOpen, onClose, onSave, currentWorkshopPath }: SettingsProp
 
   const handleCancel = () => {
     setWorkshopPath(currentWorkshopPath);
+    setDuckovGamePath(currentDuckovGamePath);
     setHasChanges(false);
     onClose();
   };
@@ -72,18 +100,18 @@ function Settings({ isOpen, onClose, onSave, currentWorkshopPath }: SettingsProp
             <p className="setting-description">
               Select the folder where your Steam Workshop mods are stored.
               <br />
-              Typically located at: <code>C:\Program Files (x86)\Steam\steamapps\workshop\content\2390090</code>
+              Typically located at: <code>C:\Program Files (x86)\Steam\steamapps\workshop\content\2618920</code>
             </p>
             
             <div className="path-input-group">
               <input
                 type="text"
                 value={workshopPath}
-                onChange={handlePathChange}
+                onChange={handleWorkshopPathChange}
                 placeholder="Select workshop folder..."
                 className="path-input"
               />
-              <button onClick={handleBrowse} className="btn btn-secondary">
+              <button onClick={handleBrowseWorkshop} className="btn btn-secondary">
                 📁 Browse
               </button>
             </div>
@@ -91,6 +119,36 @@ function Settings({ isOpen, onClose, onSave, currentWorkshopPath }: SettingsProp
             {!currentWorkshopPath && (
               <div className="warning-message">
                 ⚠️ Workshop path is not configured. Please select a folder to enable mod scanning.
+              </div>
+            )}
+          </div>
+
+          <div className="setting-section">
+            <h3>Duckov Game Folder</h3>
+            <p className="setting-description">
+              Select the "Escape from Duckov" game installation folder.
+              <br />
+              Typically located at: <code>C:\Program Files (x86)\Steam\steamapps\common\Escape from Duckov</code>
+              <br />
+              <small>This is needed to create symlinks to <code>Duckov_Data\Mods</code> folder.</small>
+            </p>
+            
+            <div className="path-input-group">
+              <input
+                type="text"
+                value={duckovGamePath}
+                onChange={handleDuckovGamePathChange}
+                placeholder="Select Duckov game folder..."
+                className="path-input"
+              />
+              <button onClick={handleBrowseDuckovGame} className="btn btn-secondary">
+                📁 Browse
+              </button>
+            </div>
+
+            {!currentDuckovGamePath && (
+              <div className="info-message">
+                ℹ️ Duckov game path is optional but required for symlink management.
               </div>
             )}
           </div>

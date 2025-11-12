@@ -61,6 +61,17 @@ export interface AppInfo {
 }
 
 /**
+ * Background task progress tracking
+ */
+export interface BackgroundTaskProgress {
+  taskId: string;
+  taskName: string;
+  message: string;
+  progress: number; // 0-100
+  isComplete: boolean;
+}
+
+/**
  * IPC Channel names - centralized for type safety
  */
 export const IpcChannels = {
@@ -89,6 +100,10 @@ export const IpcChannels = {
   APP_MINIMIZE: 'app:minimize',
   APP_MAXIMIZE: 'app:maximize',
   APP_CLOSE: 'app:close',
+
+  // Background task operations
+  BACKGROUND_TASK_PROGRESS: 'background-task:progress',
+  BACKGROUND_TASK_COMPLETE: 'background-task:complete',
 } as const;
 
 /**
@@ -115,6 +130,8 @@ export interface ElectronAPI {
   searchMods: (query: string) => Promise<ModListResult>;
   syncMods: () => Promise<ScanResult>;
   exportMods: (filePath: string, modIds: string[]) => Promise<{ success: boolean; filePath: string }>;
+  getCollectionMods: (collectionUrl: string) => Promise<{ success: boolean; data: { modIds: string[]; count: number } }>;
+  invoke: (channel: string, args?: any) => Promise<any>;
 
   // Translation operations
   translate: (request: TranslationRequest) => Promise<TranslationResponse>;
@@ -133,6 +150,10 @@ export interface ElectronAPI {
   minimize: () => void;
   maximize: () => void;
   close: () => void;
+
+  // Background task operations
+  onBackgroundTaskProgress: (callback: (progress: BackgroundTaskProgress) => void) => () => void;
+  onBackgroundTaskComplete: (callback: (taskId: string) => void) => () => void;
 }
 
 /**

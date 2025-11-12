@@ -1,0 +1,76 @@
+.background-task-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-top: 1px solid rgba(74, 144, 226, 0.3);
+  padding: 8px 16px;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.background-task {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.background-task:last-child {
+  margin-bottom: 0;
+}
+
+.task-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+}
+
+.task-name {
+  font-weight: 600;
+  color: #4a90e2;
+  font-size: 0.9rem;
+}
+
+.task-message {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 2px;
+}
+
+.task-progress-container {
+  flex: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.task-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4a90e2 0%, #67b26f 100%);
+  border-radius: 3px;
+  transition: width 0.3s ease-out;
+  box-shadow: 0 0 10px rgba(74, 144, 226, 0.5);
+}
+
+.task-percentage {
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.8);
+  min-width: 45px;
+  text-align: right;
+  font-weight: 500;
+}

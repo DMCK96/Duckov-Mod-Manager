@@ -430,8 +430,32 @@ export class ModService {
   }
 
   /**
-   * REMOVED: exportModsFromCollection
-   * This method relied on Steam API and has been removed in offline mode
-   * Use exportMods() with an array of mod IDs instead
+   * Get mod IDs from a Steam Workshop collection
+   * Fetches the collection's mod IDs from Steam's public API (no API key needed)
    */
+  async getModsFromCollection(collectionUrl: string): Promise<string[]> {
+    try {
+      // Extract collection ID from URL
+      const collectionIdMatch = collectionUrl.match(/id=(\d+)/);
+      if (!collectionIdMatch) {
+        throw new Error('Invalid collection URL. Please provide a valid Steam Workshop collection URL.');
+      }
+      
+      const collectionId = collectionIdMatch[1];
+      logger.info(`Extracting mods from collection: ${collectionId}`);
+      
+      // Get all mod IDs from the collection using Steam's public API
+      const modIds = await this.steamWorkshopService.getCollectionItems(collectionId);
+      
+      if (modIds.length === 0) {
+        throw new Error('No mods found in collection');
+      }
+      
+      logger.info(`Found ${modIds.length} mods in collection`);
+      return modIds;
+    } catch (error) {
+      logger.error('Failed to get mods from collection:', error);
+      throw error;
+    }
+  }
 }

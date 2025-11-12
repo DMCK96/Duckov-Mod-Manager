@@ -75,3 +75,21 @@ export interface CachedTranslation {
   createdAt: Date;
   expiresAt: Date;
 }
+
+export interface SymlinkInfo {
+  modId: string;
+  modTitle?: string;
+  sourcePath: string;
+  targetPath: string;
+  exists: boolean;
+}
+
+export interface SymlinkOperationResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface PathValidationResult {
+  valid: boolean;
+  errors: string[];
+}

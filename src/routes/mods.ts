@@ -225,8 +225,8 @@ router.post('/export', async (req, res, next) => {
   }
 });
 
-// Export mods from Steam Workshop collection URL
-router.post('/export/collection', async (req, res, next) => {
+// Get mod IDs from Steam Workshop collection URL
+router.post('/collection/mods', async (req, res, next) => {
   try {
     const { collectionUrl } = req.body;
     
@@ -238,10 +238,18 @@ router.post('/export/collection', async (req, res, next) => {
       return;
     }
     
-    logger.info(`Exporting mods from collection: ${collectionUrl}`);
+    logger.info(`Getting mods from collection: ${collectionUrl}`);
     
-    // The response will be streamed, so we don't use res.json
-    await modService.exportModsFromCollection(collectionUrl, res);
+    const modIds = await modService.getModsFromCollection(collectionUrl);
+    
+    res.json({
+      success: true,
+      data: {
+        modIds,
+        count: modIds.length
+      },
+      message: `Found ${modIds.length} mods in collection`
+    });
   } catch (error) {
     next(error);
   }

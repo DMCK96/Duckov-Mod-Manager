@@ -127,6 +127,21 @@ export class LocalModService {
   }
 
   /**
+   * Updates the workshop path
+   */
+  setWorkshopPath(path: string): void {
+    this.workshopPath = path;
+    logger.info(`Workshop path updated to: ${path}`);
+  }
+
+  /**
+   * Gets the current workshop path
+   */
+  getWorkshopPath(): string {
+    return this.workshopPath;
+  }
+
+  /**
    * Recursively calculates folder statistics
    */
   private async calculateFolderStats(folderPath: string): Promise<{
@@ -157,21 +172,6 @@ export class LocalModService {
     }
 
     return { fileCount, totalSize };
-  }
-
-  /**
-   * Updates the workshop path configuration
-   */
-  setWorkshopPath(path: string): void {
-    this.workshopPath = path;
-    logger.info(`Workshop data path updated to: ${path}`);
-  }
-
-  /**
-   * Gets the current workshop path
-   */
-  getWorkshopPath(): string {
-    return this.workshopPath;
   }
 
   /**

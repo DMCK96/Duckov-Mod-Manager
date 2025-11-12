@@ -28,6 +28,26 @@ interface SteamAPIResponse {
   };
 }
 
+interface CollectionChild {
+  publishedfileid: string;
+  sortorder: number;
+  filetype: number;
+}
+
+interface SteamCollectionDetails {
+  publishedfileid: string;
+  result: number;
+  children?: CollectionChild[];
+}
+
+interface SteamCollectionResponse {
+  response: {
+    result: number;
+    resultcount: number;
+    collectiondetails: SteamCollectionDetails[];
+  };
+}
+
 /**
  * SteamWorkshopService - Fetches mod metadata from Steam Workshop API
  * 
@@ -37,6 +57,7 @@ interface SteamAPIResponse {
  */
 export class SteamWorkshopService {
   private readonly STEAM_API_URL = 'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/';
+  private readonly STEAM_COLLECTION_API_URL = 'https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/';
   private readonly MAX_BATCH_SIZE = 100; // Steam API limit
 
   /**
@@ -145,6 +166,57 @@ export class SteamWorkshopService {
         logger.error('Failed to fetch Steam Workshop items:', error);
       }
       return results;
+    }
+  }
+
+  /**
+   * Get all mod IDs from a Steam Workshop collection
+   * This uses the public web API and doesn't require an API key
+   */
+  async getCollectionItems(collectionId: string): Promise<string[]> {
+    try {
+      logger.info(`Fetching collection details for: ${collectionId}`);
+
+      const response = await axios.post<SteamCollectionResponse>(
+        this.STEAM_COLLECTION_API_URL,
+        new URLSearchParams({
+          collectioncount: '1',
+          'publishedfileids[0]': collectionId,
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          timeout: 10000,
+        }
+      );
+
+      if (response.data?.response?.collectiondetails?.[0]) {
+        const collection = response.data.response.collectiondetails[0];
+        
+        // Check if the collection was found (result 1 = success)
+        if (collection.result === 1 && collection.children) {
+          const modIds = collection.children
+            .filter(child => child.filetype === 0) // filetype 0 = workshop item
+            .map(child => child.publishedfileid);
+          
+          logger.info(`Found ${modIds.length} mods in collection ${collectionId}`);
+          return modIds;
+        } else {
+          logger.warn(`Collection ${collectionId} not found or access denied (result: ${collection.result})`);
+          throw new Error('Collection not found or is private');
+        }
+      }
+
+      logger.warn(`No details returned for collection: ${collectionId}`);
+      throw new Error('Failed to fetch collection details');
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        logger.error(`Steam Collection API request failed for ${collectionId}: ${error.message}`);
+      } else {
+        logger.error(`Failed to fetch Steam Workshop collection ${collectionId}:`, error);
+      }
+      throw error;
     }
   }
 

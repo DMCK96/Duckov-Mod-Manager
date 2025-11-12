@@ -123,6 +123,16 @@
   font-size: 0.9rem;
 }
 
+.info-message {
+  margin-top: 12px;
+  padding: 12px;
+  background: rgba(102, 126, 234, 0.1);
+  border-left: 3px solid #667eea;
+  border-radius: 4px;
+  color: #9ab4f5;
+  font-size: 0.9rem;
+}
+
 .settings-footer {
   padding: 16px 24px;
   background: #222;

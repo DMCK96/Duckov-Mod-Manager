@@ -13,6 +13,7 @@ import { ModService } from './services/ModService';
 import { OfflineTranslationService } from './services/OfflineTranslationService';
 import { LocalModService } from './services/LocalModService';
 import { SteamWorkshopService } from './services/SteamWorkshopService';
+import { SymlinkService } from './services/SymlinkService';
 
 // Dynamic import for electron-store (ES Module)
 // Using eval to prevent TypeScript from converting to require()
@@ -53,6 +54,7 @@ let modService: ModService;
 let translationService: OfflineTranslationService;
 let localModService: LocalModService;
 let steamWorkshopService: SteamWorkshopService;
+let symlinkService: any; // Will be initialized when paths are configured
 
 /**
  * Main application window
@@ -174,30 +176,74 @@ async function initializeServices(): Promise<void> {
 
     logger.info('Services initialized successfully');
 
-    // Only perform initial scan if workshop path is configured
-    const workshopPath = (localModService as any).workshopPath;
-    if (workshopPath && workshopPath.trim()) {
-      try {
-        logger.info('Performing initial scan of workshop folder...');
-        const result = await modService.scanAndSyncLocalMods();
-        logger.info(
-          `Initial scan complete: ${result.scanned} mods scanned, ${result.synced.length} synced`
-        );
-        if (result.errors.length > 0) {
-          logger.warn(`Initial scan had ${result.errors.length} errors`);
-        }
-      } catch (scanError) {
-        logger.error('Failed to perform initial workshop scan:', scanError);
-        logger.warn(
-          'App will continue without initial scan. You can manually trigger a scan via the UI.'
-        );
-      }
-    } else {
-      logger.warn('Workshop path not configured. Skipping initial scan. Please configure workshop path in settings.');
-    }
+    // Don't perform initial scan here - it will be done asynchronously after window is shown
   } catch (error) {
     logger.error('Failed to initialize services:', error);
     throw error;
+  }
+}
+
+/**
+ * Perform initial workshop scan in the background
+ * Sends progress updates to the renderer process
+ */
+async function performBackgroundInitialScan(): Promise<void> {
+  const workshopPath = (localModService as any).workshopPath;
+  
+  if (!workshopPath || !workshopPath.trim()) {
+    logger.info('Workshop path not configured. Skipping background scan.');
+    return;
+  }
+
+  const taskId = 'initial-scan';
+  
+  try {
+    logger.info('Starting background initial scan of workshop folder...');
+    
+    // Send initial progress update
+    mainWindow?.webContents.send('background-task:progress', {
+      taskId,
+      taskName: 'Workshop Scan',
+      message: 'Scanning workshop folder...',
+      progress: 10,
+      isComplete: false,
+    });
+
+    const result = await modService.scanAndSyncLocalMods();
+    
+    // Send completion progress
+    mainWindow?.webContents.send('background-task:progress', {
+      taskId,
+      taskName: 'Workshop Scan',
+      message: `Scanned ${result.scanned} mods, synced ${result.synced.length}`,
+      progress: 100,
+      isComplete: true,
+    });
+
+    // Send completion event
+    mainWindow?.webContents.send('background-task:complete', taskId);
+    
+    logger.info(
+      `Background scan complete: ${result.scanned} mods scanned, ${result.synced.length} synced`
+    );
+    
+    if (result.errors.length > 0) {
+      logger.warn(`Background scan had ${result.errors.length} errors`);
+    }
+  } catch (scanError) {
+    logger.error('Failed to perform background workshop scan:', scanError);
+    
+    // Send error progress
+    mainWindow?.webContents.send('background-task:progress', {
+      taskId,
+      taskName: 'Workshop Scan',
+      message: 'Scan failed - you can manually trigger a scan via the UI',
+      progress: 100,
+      isComplete: true,
+    });
+    
+    // Send completion event even on error
+    mainWindow?.webContents.send('background-task:complete', taskId);
   }
 }
 
@@ -377,6 +423,42 @@ function registerIpcHandlers(): void {
     } catch (error) {
       logger.error('[IPC] mods:export - Error:', error);
       throw error;
+    }
+  });
+
+  /**
+   * Get mod IDs from a Steam Workshop collection
+   * Uses Steam's public web API (no API key needed)
+   */
+  ipcMain.handle('mods:collection', async (_, args: { collectionUrl: string }) => {
+    try {
+      const { collectionUrl } = args;
+
+      if (!collectionUrl || typeof collectionUrl !== 'string') {
+        return {
+          success: false,
+          error: 'collectionUrl is required and must be a string'
+        };
+      }
+
+      logger.info(`[IPC] mods:collection - Getting mods from collection: ${collectionUrl}`);
+
+      const modIds = await modService.getModsFromCollection(collectionUrl);
+
+      return {
+        success: true,
+        data: {
+          modIds,
+          count: modIds.length
+        },
+        message: `Found ${modIds.length} mods in collection`
+      };
+    } catch (error) {
+      logger.error('[IPC] mods:collection - Error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get collection mods'
+      };
     }
   });
 
@@ -586,6 +668,234 @@ function registerIpcHandlers(): void {
     }
   });
 
+  /**
+   * Get duckov game path setting
+   */
+  ipcMain.handle('settings:get-duckov-game-path', async () => {
+    try {
+      logger.debug('[IPC] settings:getDuckovGamePath - Fetching duckov game path');
+      
+      const StoreClass = await getStore();
+      const store = new StoreClass();
+      const duckovGamePath = store.get('duckovGamePath', '');
+      
+      return {
+        success: true,
+        data: duckovGamePath || ''
+      };
+    } catch (error) {
+      logger.error('[IPC] settings:getDuckovGamePath - Error:', error);
+      throw error;
+    }
+  });
+
+  /**
+   * Set duckov game path setting
+   */
+  ipcMain.handle('settings:set-duckov-game-path', async (_, args: { path: string }) => {
+    try {
+      const { path: duckovGamePath } = args;
+      logger.info(`[IPC] settings:setDuckovGamePath - Setting duckov game path to: ${duckovGamePath}`);
+      
+      // Store in user preferences for persistence
+      const StoreClass = await getStore();
+      const store = new StoreClass();
+      store.set('duckovGamePath', duckovGamePath);
+      
+      // Reinitialize symlink service with new paths
+      const workshopPath = localModService ? localModService.getWorkshopPath() : '';
+      if (workshopPath && duckovGamePath) {
+        symlinkService = new SymlinkService(workshopPath, duckovGamePath);
+        logger.info('SymlinkService reinitialized with new paths');
+      }
+      
+      return {
+        success: true,
+        message: 'Duckov game path updated successfully'
+      };
+    } catch (error) {
+      logger.error('[IPC] settings:setDuckovGamePath - Error:', error);
+      throw error;
+    }
+  });
+
+  // ==========================================
+  // Symlink Operations
+  // ==========================================
+
+  /**
+   * List all active symlinks
+   */
+  ipcMain.handle('symlink:list-active', async () => {
+    try {
+      logger.debug('[IPC] symlink:listActive - Fetching active symlinks');
+      
+      if (!symlinkService) {
+        const StoreClass = await getStore();
+        const store = new StoreClass();
+        const workshopPath = localModService ? localModService.getWorkshopPath() : '';
+        const duckovGamePath = store.get('duckovGamePath', '') as string;
+        
+        if (!workshopPath || !duckovGamePath) {
+          return {
+            success: false,
+            error: 'Workshop path or Duckov game path not configured',
+            data: []
+          };
+        }
+        
+        symlinkService = new SymlinkService(workshopPath, duckovGamePath);
+      }
+      
+      const symlinks = await symlinkService.listActiveSymlinks();
+      
+      return {
+        success: true,
+        data: symlinks
+      };
+    } catch (error) {
+      logger.error('[IPC] symlink:listActive - Error:', error);
+      throw error;
+    }
+  });
+
+  /**
+   * Get available mods (mods without symlinks)
+   */
+  ipcMain.handle('symlink:get-available-mods', async () => {
+    try {
+      logger.debug('[IPC] symlink:getAvailableMods - Fetching available mods');
+      
+      if (!symlinkService) {
+        const StoreClass = await getStore();
+        const store = new StoreClass();
+        const workshopPath = localModService ? localModService.getWorkshopPath() : '';
+        const duckovGamePath = store.get('duckovGamePath', '') as string;
+        
+        if (!workshopPath || !duckovGamePath) {
+          return {
+            success: false,
+            error: 'Workshop path or Duckov game path not configured',
+            data: []
+          };
+        }
+        
+        symlinkService = new SymlinkService(workshopPath, duckovGamePath);
+      }
+      
+      const availableMods = await symlinkService.getAvailableMods();
+      
+      return {
+        success: true,
+        data: availableMods
+      };
+    } catch (error) {
+      logger.error('[IPC] symlink:getAvailableMods - Error:', error);
+      throw error;
+    }
+  });
+
+  /**
+   * Create a symlink for a mod
+   */
+  ipcMain.handle('symlink:create', async (_, args: { modId: string }) => {
+    try {
+      const { modId } = args;
+      logger.info(`[IPC] symlink:create - Creating symlink for mod ${modId}`);
+      
+      if (!symlinkService) {
+        const StoreClass = await getStore();
+        const store = new StoreClass();
+        const workshopPath = localModService ? localModService.getWorkshopPath() : '';
+        const duckovGamePath = store.get('duckovGamePath', '') as string;
+        
+        if (!workshopPath || !duckovGamePath) {
+          return {
+            success: false,
+            error: 'Workshop path or Duckov game path not configured'
+          };
+        }
+        
+        symlinkService = new SymlinkService(workshopPath, duckovGamePath);
+      }
+      
+      const result = await symlinkService.createSymlink(modId);
+      
+      return result;
+    } catch (error) {
+      logger.error('[IPC] symlink:create - Error:', error);
+      throw error;
+    }
+  });
+
+  /**
+   * Remove a symlink for a mod
+   */
+  ipcMain.handle('symlink:remove', async (_, args: { modId: string }) => {
+    try {
+      const { modId } = args;
+      logger.info(`[IPC] symlink:remove - Removing symlink for mod ${modId}`);
+      
+      if (!symlinkService) {
+        const StoreClass = await getStore();
+        const store = new StoreClass();
+        const workshopPath = localModService ? localModService.getWorkshopPath() : '';
+        const duckovGamePath = store.get('duckovGamePath', '') as string;
+        
+        if (!workshopPath || !duckovGamePath) {
+          return {
+            success: false,
+            error: 'Workshop path or Duckov game path not configured'
+          };
+        }
+        
+        symlinkService = new SymlinkService(workshopPath, duckovGamePath);
+      }
+      
+      const result = await symlinkService.removeSymlink(modId);
+      
+      return result;
+    } catch (error) {
+      logger.error('[IPC] symlink:remove - Error:', error);
+      throw error;
+    }
+  });
+
+  /**
+   * Validate symlink paths configuration
+   */
+  ipcMain.handle('symlink:validate-paths', async () => {
+    try {
+      logger.debug('[IPC] symlink:validatePaths - Validating symlink paths');
+      
+      const StoreClass = await getStore();
+      const store = new StoreClass();
+      const workshopPath = localModService ? localModService.getWorkshopPath() : '';
+      const duckovGamePath = store.get('duckovGamePath', '') as string;
+      
+      if (!workshopPath || !duckovGamePath) {
+        return {
+          success: true,
+          data: {
+            valid: false,
+            errors: ['Workshop path or Duckov game path not configured']
+          }
+        };
+      }
+      
+      const tempSymlinkService = new SymlinkService(workshopPath, duckovGamePath);
+      const validation = await tempSymlinkService.validatePaths();
+      
+      return {
+        success: true,
+        data: validation
+      };
+    } catch (error) {
+      logger.error('[IPC] symlink:validatePaths - Error:', error);
+      throw error;
+    }
+  });
+
   // ==========================================
   // App Operations
   // ==========================================
@@ -684,6 +994,14 @@ app.whenReady().then(async () => {
     console.log('[STARTUP] Creating main window');
     // Create main window
     mainWindow = createMainWindow();
+
+    // Perform initial scan in the background after a short delay
+    // This allows the window to show first without blocking
+    setTimeout(() => {
+      performBackgroundInitialScan().catch((error) => {
+        logger.error('Background scan failed:', error);
+      });
+    }, 500);
 
     console.log('[STARTUP] Application started successfully');
     logger.info('Application started successfully');

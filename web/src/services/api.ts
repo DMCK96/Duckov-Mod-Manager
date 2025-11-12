@@ -181,6 +181,33 @@ export const modsAPI = {
   },
 
   /**
+   * Get mod IDs from a Steam Workshop collection
+   * Uses the public Steam Web API (no API key needed)
+   * @param collectionUrl - Steam Workshop collection URL
+   */
+  async getCollectionMods(collectionUrl: string): Promise<{
+    modIds: string[];
+    count: number;
+  }> {
+    requireElectron();
+
+    try {
+      console.log(`[API] Getting mods from collection: ${collectionUrl}`);
+      const result = await window.electronAPI.invoke('mods:collection', { collectionUrl });
+
+      if (result.success && result.data) {
+        console.log(`[API] Found ${result.data.count} mods in collection`);
+        return result.data;
+      } else {
+        throw new Error(result.error || 'Failed to get collection mods');
+      }
+    } catch (error) {
+      console.error('[API] Failed to get collection mods:', error);
+      throw error;
+    }
+  },
+
+  /**
    * Export selected mods as a zip file
    * Opens a save dialog and creates a zip archive
    * @param modIds - Array of mod IDs to export

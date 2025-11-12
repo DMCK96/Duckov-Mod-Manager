@@ -3,6 +3,8 @@ import ModList from './components/ModList'
 import SearchBar from './components/SearchBar'
 import Statistics from './components/Statistics'
 import Settings from './components/Settings'
+import SymlinkManager from './components/SymlinkManager'
+import BackgroundTaskBar, { BackgroundTask } from './components/BackgroundTaskBar'
 import { modsAPI } from './services/api'
 import './App.css'
 
@@ -22,13 +24,14 @@ interface ModInfo {
 
 export type SortOption = 'updated' | 'rating' | 'subscriptions' | 'title';
 export type SortDirection = 'asc' | 'desc';
+export type ViewMode = 'mods' | 'symlinks';
 
 function App() {
   const [mods, setMods] = useState<ModInfo[]>([]);
   const [filteredMods, setFilteredMods] = useState<ModInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [stats, setStats] = useState(null);
+  const [stats, setStats] = useState<any>(null);
   const [sortBy, setSortBy] = useState<SortOption>('updated');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>([]);
@@ -40,10 +43,49 @@ function App() {
   const [collectionUrl, setCollectionUrl] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [workshopPath, setWorkshopPath] = useState('');
+  const [duckovGamePath, setDuckovGamePath] = useState('');
   const [isWorkshopConfigured, setIsWorkshopConfigured] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>('mods');
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([]);
 
   useEffect(() => {
     initializeApp();
+
+    // Set up background task listeners
+    if (window.electronAPI?.onBackgroundTaskProgress) {
+      const cleanupProgress = window.electronAPI.onBackgroundTaskProgress((progress) => {
+        setBackgroundTasks((prevTasks) => {
+          // Update existing task or add new one
+          const existingIndex = prevTasks.findIndex(t => t.taskId === progress.taskId);
+          if (existingIndex >= 0) {
+            const newTasks = [...prevTasks];
+            newTasks[existingIndex] = progress;
+            return newTasks;
+          } else {
+            return [...prevTasks, progress];
+          }
+        });
+
+        // If task is complete, refresh mods and stats
+        if (progress.isComplete && progress.taskId === 'initial-scan') {
+          fetchMods();
+          fetchStats();
+        }
+      });
+
+      const cleanupComplete = window.electronAPI.onBackgroundTaskComplete((taskId) => {
+        // Remove completed task after a delay
+        setTimeout(() => {
+          setBackgroundTasks((prevTasks) => prevTasks.filter(t => t.taskId !== taskId));
+        }, 3000);
+      });
+
+      // Cleanup listeners on unmount
+      return () => {
+        cleanupProgress();
+        cleanupComplete();
+      };
+    }
   }, []);
 
   const initializeApp = async () => {
@@ -56,6 +98,13 @@ function App() {
         if (configured) {
           const path = await window.electronAPI.getWorkshopPath();
           setWorkshopPath(path);
+          
+          // Also load duckov game path if available
+          if (window.electronAPI?.getDuckovGamePath) {
+            const gamePath = await window.electronAPI.getDuckovGamePath();
+            setDuckovGamePath(gamePath);
+          }
+          
           // Fetch mods if configured
           await fetchMods();
           await fetchStats();
@@ -237,23 +286,29 @@ function App() {
     }
   };
 
-  const handleSaveSettings = async (newWorkshopPath: string) => {
+  const handleSaveSettings = async (newWorkshopPath: string, newDuckovGamePath: string) => {
     try {
       if (window.electronAPI?.setWorkshopPath) {
         await window.electronAPI.setWorkshopPath(newWorkshopPath);
         setWorkshopPath(newWorkshopPath);
         setIsWorkshopConfigured(true);
+        
+        if (window.electronAPI?.setDuckovGamePath) {
+          await window.electronAPI.setDuckovGamePath(newDuckovGamePath);
+          setDuckovGamePath(newDuckovGamePath);
+        }
+        
         setShowSettings(false);
         
         // Refresh mods after setting workshop path
         await fetchMods();
         await fetchStats();
         
-        alert('Workshop path updated successfully!');
+        alert('Settings updated successfully!');
       }
     } catch (error) {
-      console.error('Failed to save workshop path:', error);
-      alert(`Failed to save workshop path: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error('Failed to save settings:', error);
+      alert(`Failed to save settings: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
@@ -346,15 +401,31 @@ function App() {
 
     setLoading(true);
     try {
-      // NOTE: Collection export requires Steam Workshop API access
-      // This is not available in the offline Electron version
-      // Keeping the UI for potential future implementation
-      alert(
-        'Collection export is not available in offline mode.\n\n' +
-        'This feature requires Steam Workshop API access.\n' +
-        'Please use "Export Selected" to export mods that are already downloaded.'
-      );
+      // Get mod IDs from the collection using Steam's public web API
+      const result = await modsAPI.getCollectionMods(collectionUrl);
+      
+      if (!result.modIds || result.modIds.length === 0) {
+        alert('No mods found in collection');
+        setShowExportDialog(false);
+        return;
+      }
+
+      console.log(`Found ${result.count} mods in collection, exporting...`);
+      
+      // Export the mods
+      const exportResult = await modsAPI.exportMods(result.modIds);
+      
+      if (exportResult.success) {
+        const message = `Successfully exported ${exportResult.exportedCount} mods from collection!\n\n` +
+                       `File: ${exportResult.filePath}` +
+                       (exportResult.missingMods.length > 0 
+                         ? `\n\nMissing mods (not downloaded locally): ${exportResult.missingMods.length}`
+                         : '');
+        alert(message);
+      }
+      
       setShowExportDialog(false);
+      setCollectionUrl('');
     } catch (error) {
       console.error('Failed to export collection:', error);
       alert(`Failed to export collection: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -370,24 +441,39 @@ function App() {
           <h1>🦆 Duckov Mod Manager</h1>
           <p>Manage your Escape from Duckov mods with automatic translation</p>
         </div>
-        <button 
-          onClick={() => setShowSettings(true)}
-          className="btn btn-secondary settings-btn"
-          title="Open Settings"
-        >
-          <span className="btn-icon">⚙️</span>
-          <span className="btn-text">Settings</span>
-        </button>
+        <div className="header-actions">
+          <div className="view-tabs">
+            <button 
+              onClick={() => setViewMode('mods')}
+              className={`tab-btn ${viewMode === 'mods' ? 'active' : ''}`}
+            >
+              📋 Mod List
+            </button>
+            <button 
+              onClick={() => setViewMode('symlinks')}
+              className={`tab-btn ${viewMode === 'symlinks' ? 'active' : ''}`}
+            >
+              🔗 Symlink Manager
+            </button>
+          </div>
+          <button 
+            onClick={() => setShowSettings(true)}
+            className="btn btn-secondary settings-btn"
+            title="Open Settings"
+          >
+            <span className="btn-icon">⚙️</span>
+            <span className="btn-text">Settings</span>
+          </button>
+        </div>
       </header>
 
-      <Settings 
+      <Settings
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
         onSave={handleSaveSettings}
         currentWorkshopPath={workshopPath}
-      />
-
-      <main className="app-main">
+        currentDuckovGamePath={duckovGamePath}
+      />      <main className="app-main">
         <div className="top-controls">
           <SearchBar onSearch={handleSearch} searchTerm={searchTerm} />
           <div className="actions">
@@ -567,17 +653,23 @@ function App() {
           </div>
         )}
         
-        <ModList 
-          mods={filteredMods} 
-          loading={loading} 
-          onSync={syncMods}
-          selectedMods={selectedMods}
-          onToggleSelect={toggleSelectMod}
-          onSelectAll={selectAllMods}
-          onClearSelection={clearSelection}
-          isWorkshopConfigured={isWorkshopConfigured}
-        />
+        {viewMode === 'mods' ? (
+          <ModList 
+            mods={filteredMods} 
+            loading={loading} 
+            onSync={syncMods}
+            selectedMods={selectedMods}
+            onToggleSelect={toggleSelectMod}
+            onSelectAll={selectAllMods}
+            onClearSelection={clearSelection}
+            isWorkshopConfigured={isWorkshopConfigured}
+          />
+        ) : (
+          <SymlinkManager mods={filteredMods} />
+        )}
       </main>
+
+      <BackgroundTaskBar tasks={backgroundTasks} />
 
       <footer className="app-footer">
         <p>Duckov Mod Manager - Built with Steam Workshop API & DeepL Translation</p>

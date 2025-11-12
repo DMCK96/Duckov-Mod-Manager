@@ -25,6 +25,7 @@ enum IpcChannels {
   MODS_SEARCH = 'mods:search',
   MODS_SYNC = 'mods:sync',
   MODS_EXPORT = 'mods:export',
+  MODS_COLLECTION = 'mods:collection',
 
   // Translation operations
   TRANSLATION_TRANSLATE = 'translation:translate',
@@ -34,7 +35,16 @@ enum IpcChannels {
   // Settings operations
   SETTINGS_GET_WORKSHOP_PATH = 'settings:get-workshop-path',
   SETTINGS_SET_WORKSHOP_PATH = 'settings:set-workshop-path',
+  SETTINGS_GET_DUCKOV_GAME_PATH = 'settings:get-duckov-game-path',
+  SETTINGS_SET_DUCKOV_GAME_PATH = 'settings:set-duckov-game-path',
   SETTINGS_IS_WORKSHOP_CONFIGURED = 'settings:is-workshop-configured',
+
+  // Symlink operations
+  SYMLINK_LIST_ACTIVE = 'symlink:list-active',
+  SYMLINK_GET_AVAILABLE_MODS = 'symlink:get-available-mods',
+  SYMLINK_CREATE = 'symlink:create',
+  SYMLINK_REMOVE = 'symlink:remove',
+  SYMLINK_VALIDATE_PATHS = 'symlink:validate-paths',
 
   // File dialog operations
   DIALOG_OPEN = 'dialog:open',
@@ -48,6 +58,10 @@ enum IpcChannels {
   APP_MINIMIZE = 'app:minimize',
   APP_MAXIMIZE = 'app:maximize',
   APP_CLOSE = 'app:close',
+
+  // Background task operations
+  BACKGROUND_TASK_PROGRESS = 'background-task:progress',
+  BACKGROUND_TASK_COMPLETE = 'background-task:complete',
 }
 
 /**
@@ -88,6 +102,8 @@ interface ElectronAPI {
   searchMods: (query: string) => Promise<any>;
   syncMods: () => Promise<any>;
   exportMods: (filePath: string, modIds: string[]) => Promise<any>;
+  getCollectionMods: (collectionUrl: string) => Promise<any>;
+  invoke: (channel: string, args?: any) => Promise<any>;
 
   // Translation operations
   translate: (request: TranslationRequest) => Promise<any>;
@@ -97,7 +113,16 @@ interface ElectronAPI {
   // Settings operations
   getWorkshopPath: () => Promise<string>;
   setWorkshopPath: (path: string) => Promise<void>;
+  getDuckovGamePath: () => Promise<string>;
+  setDuckovGamePath: (path: string) => Promise<void>;
   isWorkshopConfigured: () => Promise<boolean>;
+
+  // Symlink operations
+  listActiveSymlinks: () => Promise<any>;
+  getAvailableMods: () => Promise<any>;
+  createSymlink: (modId: string) => Promise<any>;
+  removeSymlink: (modId: string) => Promise<any>;
+  validateSymlinkPaths: () => Promise<any>;
 
   // File dialog operations
   showOpenDialog: (options: OpenDialogOptions) => Promise<any>;
@@ -111,6 +136,10 @@ interface ElectronAPI {
   minimize: () => void;
   maximize: () => void;
   close: () => void;
+
+  // Background task operations
+  onBackgroundTaskProgress: (callback: (progress: any) => void) => () => void;
+  onBackgroundTaskComplete: (callback: (taskId: string) => void) => () => void;
 }
 
 /**
@@ -203,6 +232,16 @@ const electronAPI: ElectronAPI = {
     return await safeInvoke(IpcChannels.MODS_EXPORT, { filePath, modIds });
   },
 
+  /**
+   * Get mod IDs from a Steam Workshop collection
+   */
+  getCollectionMods: async (collectionUrl: string) => {
+    if (typeof collectionUrl !== 'string' || !collectionUrl.trim()) {
+      throw new Error('Invalid collection URL');
+    }
+    return await safeInvoke(IpcChannels.MODS_COLLECTION, { collectionUrl });
+  },
+
   // ==========================================
   // Translation Operations
   // ==========================================
@@ -271,6 +310,72 @@ const electronAPI: ElectronAPI = {
   isWorkshopConfigured: async () => {
     const result: any = await safeInvoke(IpcChannels.SETTINGS_IS_WORKSHOP_CONFIGURED);
     return result.data || false;
+  },
+
+  /**
+   * Get duckov game path setting
+   */
+  getDuckovGamePath: async () => {
+    const result: any = await safeInvoke(IpcChannels.SETTINGS_GET_DUCKOV_GAME_PATH);
+    return result.data || '';
+  },
+
+  /**
+   * Set duckov game path setting
+   */
+  setDuckovGamePath: async (path: string) => {
+    if (typeof path !== 'string') {
+      throw new Error('Invalid duckov game path');
+    }
+    await safeInvoke(IpcChannels.SETTINGS_SET_DUCKOV_GAME_PATH, { path });
+  },
+
+  // ==========================================
+  // Symlink Operations
+  // ==========================================
+
+  /**
+   * List all active symlinks
+   */
+  listActiveSymlinks: async () => {
+    const result: any = await safeInvoke(IpcChannels.SYMLINK_LIST_ACTIVE);
+    return result.data || [];
+  },
+
+  /**
+   * Get available mods (without symlinks)
+   */
+  getAvailableMods: async () => {
+    const result: any = await safeInvoke(IpcChannels.SYMLINK_GET_AVAILABLE_MODS);
+    return result.data || [];
+  },
+
+  /**
+   * Create a symlink for a mod
+   */
+  createSymlink: async (modId: string) => {
+    if (typeof modId !== 'string' || !modId.trim()) {
+      throw new Error('Invalid mod ID');
+    }
+    return await safeInvoke(IpcChannels.SYMLINK_CREATE, { modId });
+  },
+
+  /**
+   * Remove a symlink for a mod
+   */
+  removeSymlink: async (modId: string) => {
+    if (typeof modId !== 'string' || !modId.trim()) {
+      throw new Error('Invalid mod ID');
+    }
+    return await safeInvoke(IpcChannels.SYMLINK_REMOVE, { modId });
+  },
+
+  /**
+   * Validate symlink paths configuration
+   */
+  validateSymlinkPaths: async () => {
+    const result: any = await safeInvoke(IpcChannels.SYMLINK_VALIDATE_PATHS);
+    return result.data || { valid: false, errors: ['Unknown error'] };
   },
 
   // ==========================================
@@ -364,6 +469,47 @@ const electronAPI: ElectronAPI = {
    */
   close: () => {
     safeSend(IpcChannels.APP_CLOSE);
+  },
+
+  // ==========================================
+  // Background Task Operations
+  // ==========================================
+
+  /**
+   * Listen to background task progress updates
+   * Returns a cleanup function to remove the listener
+   */
+  onBackgroundTaskProgress: (callback: (progress: any) => void) => {
+    const listener = (_event: any, progress: any) => callback(progress);
+    ipcRenderer.on(IpcChannels.BACKGROUND_TASK_PROGRESS, listener);
+    // Return cleanup function
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.BACKGROUND_TASK_PROGRESS, listener);
+    };
+  },
+
+  /**
+   * Listen to background task completion events
+   * Returns a cleanup function to remove the listener
+   */
+  onBackgroundTaskComplete: (callback: (taskId: string) => void) => {
+    const listener = (_event: any, taskId: string) => callback(taskId);
+    ipcRenderer.on(IpcChannels.BACKGROUND_TASK_COMPLETE, listener);
+    // Return cleanup function
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.BACKGROUND_TASK_COMPLETE, listener);
+    };
+  },
+
+  // ==========================================
+  // Generic invoke for additional channels
+  // ==========================================
+
+  /**
+   * Generic invoke method for IPC channels
+   */
+  invoke: async (channel: string, args?: any) => {
+    return await safeInvoke(channel, args);
   },
 };
 
