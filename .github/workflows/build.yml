@@ -1,0 +1,305 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+      - electron
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - electron
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Run tests
+        run: npm run test:ci
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        if: success()
+        with:
+          files: ./coverage/lcov.info
+          fail_ci_if_error: false
+
+  build:
+    name: Build on ${{ matrix.os }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            artifact_name: 'windows-installers'
+          - os: macos-latest
+            platform: mac
+            artifact_name: 'macos-installers'
+          - os: ubuntu-latest
+            platform: linux
+            artifact_name: 'linux-packages'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies (Windows)
+        if: matrix.platform == 'win'
+        run: npm ci
+
+      - name: Install dependencies (macOS)
+        if: matrix.platform == 'mac'
+        run: npm ci
+
+      - name: Install dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+          npm ci
+
+      - name: Build application
+        env:
+          NODE_ENV: production
+        run: npm run build:prod
+
+      - name: Verify build
+        run: npm run build:verify
+
+      - name: Upload build reports
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: build-reports-${{ matrix.platform }}
+          path: |
+            build-report.json
+            verification-report.json
+
+      - name: Build distributables (Windows)
+        if: matrix.platform == 'win'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:win
+
+      - name: Build distributables (macOS)
+        if: matrix.platform == 'mac'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Uncomment and add secrets for code signing
+          # CSC_LINK: ${{ secrets.MAC_CERT_BASE64 }}
+          # CSC_KEY_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: npm run dist:mac
+
+      - name: Build distributables (Linux)
+        if: matrix.platform == 'linux'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:linux
+
+      - name: Upload artifacts (Windows)
+        if: matrix.platform == 'win'
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            release/*.exe
+            release/*.msi
+          retention-days: 30
+
+      - name: Upload artifacts (macOS)
+        if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            release/*.dmg
+            release/*.zip
+          retention-days: 30
+
+      - name: Upload artifacts (Linux)
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.rpm
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: windows-installers
+          path: release/windows
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: macos-installers
+          path: release/macos
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: linux-packages
+          path: release/linux
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Create checksums
+        run: |
+          cd release
+          find . -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) -exec sha256sum {} \; > checksums.txt
+
+      - name: Create Release Notes
+        id: release_notes
+        run: |
+          cat << 'EOF' > release_notes.md
+          ## Duckov Mod Manager ${{ steps.get_version.outputs.VERSION }}
+
+          ### Downloads
+
+          #### Windows
+          - **NSIS Installer**: For standard installation with Start Menu shortcuts
+          - **Portable**: Standalone executable, no installation required
+
+          #### macOS
+          - **DMG**: Drag-and-drop installer for macOS
+          - **ZIP**: Alternative distribution format
+
+          #### Linux
+          - **AppImage**: Universal Linux package (recommended)
+          - **DEB**: For Debian/Ubuntu-based distributions
+          - **RPM**: For Fedora/RHEL-based distributions
+
+          ### Installation Instructions
+
+          See [README_BUILD.md](README_BUILD.md) for detailed installation instructions.
+
+          ### Checksums
+
+          SHA256 checksums are provided in `checksums.txt` for verification.
+
+          ### Changes
+
+          See [CHANGELOG.md](CHANGELOG.md) for detailed changes in this release.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            release/windows/*
+            release/macos/*
+            release/linux/*
+            release/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  analyze:
+    name: Bundle Size Analysis
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build with analysis
+        env:
+          NODE_ENV: production
+        run: npm run build:prod
+
+      - name: Comment PR with build size
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('build-report.json', 'utf8'));
+
+            const comment = `
+            ## Build Size Report
+
+            | Directory | Size | Files |
+            |-----------|------|-------|
+            | dist/ | ${report.directories.dist.sizeFormatted} | ${report.directories.dist.files} |
+            | web/dist/ | ${report.directories.webDist.sizeFormatted} | ${report.directories.webDist.files} |
+            | node_modules/ | ${report.directories.nodeModules.sizeFormatted} | ${report.directories.nodeModules.files} |
+            | **Total** | **${report.total.sizeFormatted}** | **${report.total.files}** |
+
+            ### Optimization
+            - Files removed: ${report.optimization.filesRemoved}
+            - Space freed: ${report.optimization.bytesFreedFormatted}
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

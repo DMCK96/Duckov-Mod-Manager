@@ -6,6 +6,17 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Database files
+data/
+*.db
+*.sqlite
+*.sqlite3
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
@@ -86,3 +97,40 @@ typings/
 
 # DynamoDB Local files
 .dynamodb/
+
+# Electron build output
+release/
+dist/
+out/
+build/Release
+
+# Electron builder files
+dist-electron/
+.electron-builder/
+
+# Build artifacts
+*.exe
+*.dmg
+*.app
+*.deb
+*.rpm
+*.AppImage
+*.snap
+*.tar.gz
+*.zip
+*.msi
+
+# Build reports
+build-report.json
+verification-report.json
+benchmark-results.json
+
+# Vite build output
+web/dist/
+
+# TypeScript build info
+*.tsbuildinfo
+
+package-lock.json
+
+.claude/

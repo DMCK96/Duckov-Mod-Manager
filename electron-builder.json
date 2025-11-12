@@ -1,0 +1,189 @@
+{
+  "appId": "com.dmck96.duckov-mod-manager",
+  "productName": "Duckov Mod Manager",
+  "copyright": "Copyright © 2024-2025 DMCK96",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "dist/**/*",
+    "web/dist/**/*",
+    "package.json",
+    "!dist/**/*.ts",
+    "!dist/**/*.map",
+    "!dist/**/*.d.ts",
+    "!web/dist/**/*.map",
+    "!**/__tests__/**",
+    "!**/__mocks__/**",
+    "!**/test/**",
+    "!**/tests/**",
+    "!**/*.spec.js",
+    "!**/*.test.js",
+    "!**/*.spec.ts",
+    "!**/*.test.ts",
+    "!**/docs/**",
+    "!**/coverage/**",
+    "!**/.vscode/**",
+    "!**/.idea/**",
+    "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+    "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+    "!**/node_modules/*.d.ts",
+    "!**/node_modules/.bin",
+    "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+    "!.editorconfig",
+    "!**/._*",
+    "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+    "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+    "!**/{appveyor.yml,.travis.yml,circle.yml}",
+    "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+  ],
+  "extraMetadata": {
+    "main": "dist/main.js"
+  },
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64",
+          "ia32"
+        ]
+      },
+      {
+        "target": "portable",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "publisherName": "DMCK96",
+    "verifyUpdateCodeSignature": false,
+    "rfc3161TimeStampServer": "http://timestamp.digicert.com"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowElevation": true,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "createDesktopShortcut": "always",
+    "createStartMenuShortcut": true,
+    "shortcutName": "Duckov Mod Manager",
+    "warningsAsErrors": false,
+    "runAfterFinish": true,
+    "menuCategory": true,
+    "displayLanguageSelector": false,
+    "installerLanguages": ["en_US"],
+    "language": "1033",
+    "multiLanguageInstaller": false,
+    "packElevateHelper": true,
+    "removeDefaultUninstallWelcomePage": false,
+    "guid": "4c9c02c8-3e7b-4f2a-9d8a-1a5b6c7d8e9f",
+    "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+    "uninstallDisplayName": "${productName}"
+  },
+  "portable": {
+    "artifactName": "${productName}-${version}-portable.exe"
+  },
+  "mac": {
+    "target": [
+      "dmg",
+      "zip"
+    ],
+    "icon": "build/icon.icns",
+    "category": "public.app-category.utilities",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": false,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "type": "distribution",
+    "minimumSystemVersion": "10.15.0"
+  },
+  "dmg": {
+    "contents": [
+      {
+        "x": 130,
+        "y": 220
+      },
+      {
+        "x": 410,
+        "y": 220,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ],
+    "window": {
+      "width": 540,
+      "height": 380
+    },
+    "title": "${productName} ${version}",
+    "background": "build/background.tiff",
+    "icon": "build/icon.icns"
+  },
+  "linux": {
+    "target": [
+      "AppImage",
+      "deb",
+      "rpm"
+    ],
+    "icon": "build/icons",
+    "category": "Utility",
+    "synopsis": "Mod manager for Escape from Duckov with Steam Workshop integration",
+    "desktop": {
+      "Name": "Duckov Mod Manager",
+      "Comment": "Manage mods for Escape from Duckov",
+      "Categories": "Game;Utility;",
+      "StartupWMClass": "duckov-mod-manager"
+    },
+    "maintainer": "DMCK96",
+    "vendor": "DMCK96"
+  },
+  "deb": {
+    "depends": [
+      "gconf2",
+      "gconf-service",
+      "libnotify4",
+      "libappindicator1",
+      "libxtst6",
+      "libnss3"
+    ],
+    "priority": "optional"
+  },
+  "rpm": {
+    "depends": [
+      "libXScrnSaver"
+    ]
+  },
+  "publish": null,
+  "compression": "maximum",
+  "asar": true,
+  "asarUnpack": [
+    "**/*.{node,dll}",
+    "**/node_modules/better-sqlite3/**/*",
+    "**/node_modules/@xenova/transformers/**/*",
+    "web/dist/**/*"
+  ],
+  "nodeGypRebuild": false,
+  "buildDependenciesFromSource": false,
+  "npmRebuild": true,
+  "fileAssociations": [
+    {
+      "ext": "duckmod",
+      "name": "Duckov Mod File",
+      "description": "Duckov Mod Manager Mod File",
+      "role": "Editor",
+      "mimeType": "application/x-duckmod"
+    }
+  ],
+  "protocols": [
+    {
+      "name": "duckov-mod-manager",
+      "schemes": [
+        "duckovmm"
+      ],
+      "role": "Viewer"
+    }
+  ]
+}
