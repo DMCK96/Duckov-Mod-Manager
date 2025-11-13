@@ -13,7 +13,7 @@ A desktop application that helps you:
 
 **Best Features**:
 - Works completely offline (no internet needed after setup)
-- Automatic translation of Chinese, Russian, and other languages
+- Automatic translation of Chinese, Russian, and other languages (currently only Chinese -> English is supported)
 - Fast search and filtering
 - Clean, modern interface
 - Free and open source
